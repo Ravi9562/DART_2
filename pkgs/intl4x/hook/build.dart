@@ -4,13 +4,17 @@
 
 import 'dart:io';
 
-import 'package:archive/archive_io.dart';
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:native_assets_cli/native_assets_cli.dart';
 import 'package:path/path.dart' as path;
+
+import 'hashes.dart';
 
 const crateName = 'icu_capi';
 const package = 'intl4x';
 const assetId = 'src/bindings/lib.g.dart';
+
+const version = 'intl4x-v.0.9.1-artifacts';
 
 void main(List<String> args) async {
   await build(args, (config, output) async {
@@ -51,18 +55,6 @@ Unknown build mode for icu4x. Set the `ICU4X_BUILD_MODE` environment variable wi
   });
 }
 
-void unzipFirstFile({required File input, required File output}) {
-  final inputStream = InputFileStream(input.path);
-  final archive = ZipDecoder().decodeBuffer(inputStream);
-  final file = archive.files.firstOrNull;
-  // If it's a file and not a directory
-  if (file?.isFile ?? false) {
-    final outputStream = OutputFileStream(output.path);
-    file!.writeContent(outputStream);
-    outputStream.close();
-  }
-}
-
 sealed class BuildMode {
   List<Uri> get dependencies;
 
@@ -76,33 +68,32 @@ final class FetchMode implements BuildMode {
 
   @override
   Future<Uri> build() async {
-    // TODO: Get a nicer CDN than a generated link to a privately owned repo.
+    final target = '${config.targetOS}_${config.targetArchitecture}';
     final uri = Uri.parse(
-        'https://nightly.link/mosuem/i18n/workflows/intl4x_artifacts/main/lib-$platformName-latest.zip');
+        'https://github.com/dart-lang/i18n/releases/download/$version/$target');
     final request = await HttpClient().getUrl(uri);
     final response = await request.close();
     if (response.statusCode != 200) {
       throw ArgumentError('The request to $uri failed');
     }
-    final zippedDynamicLibrary =
-        File(path.join(Directory.systemTemp.path, 'tmp.zip'));
-    zippedDynamicLibrary.createSync();
-    await response.pipe(zippedDynamicLibrary.openWrite());
-
     final dynamicLibrary =
         File.fromUri(config.outputDirectory.resolve('icu4xlib'));
     await dynamicLibrary.create();
-    unzipFirstFile(input: zippedDynamicLibrary, output: dynamicLibrary);
-    return dynamicLibrary.uri;
-  }
+    await response.pipe(dynamicLibrary.openWrite());
 
-  String get platformName {
-    if (Platform.isMacOS) {
-      return 'macos';
-    } else if (Platform.isWindows) {
-      return 'windows';
+    final bytes = await dynamicLibrary.readAsBytes();
+    final fileHash = sha256.convert(bytes).toString();
+    final expectedFileHash = fileHashes[(
+      config.targetOS,
+      config.targetArchitecture,
+    )];
+    if (fileHash == expectedFileHash) {
+      return dynamicLibrary.uri;
     } else {
-      return 'ubuntu';
+      throw ArgumentError(
+          'The pre-built binary for the target $target at $uri has a hash of '
+          '$fileHash, which does not match $expectedFileHash fixed in the '
+          'build hook of package:intl4x.');
     }
   }
 

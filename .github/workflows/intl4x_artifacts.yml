@@ -6,7 +6,7 @@ permissions:
 on:
   push:
     tags:
-      - 'intl4x-v.*'
+      - 'intl4x-v*'
   workflow_dispatch:
 
 jobs:
